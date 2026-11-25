@@ -10,6 +10,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [SSUtil applyThemeToViewController:self];
     self.title = @"Trùng lặp";
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(storeUpdated:) name:SSStoreDidUpdateNotification object:nil];
 }
@@ -84,15 +85,98 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [SSUtil applyThemeToViewController:self];
     self.title = @"Nhóm trùng";
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Bỏ chọn hết"
+                                                                              style:UIBarButtonItemStylePlain
+                                                                             target:self action:@selector(toggleAllTapped)];
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-    btn.frame = CGRectMake(16, 12, self.view.bounds.size.width - 32, 48);
     [btn setTitle:@"Chuyển các bản sao đã chọn vào thùng rác" forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [btn addTarget:self action:@selector(trashSelectedTapped) forControlEvents:UIControlEventTouchUpInside];
-    UIView *footer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 76)];
+    UIButton *bk = [UIButton buttonWithType:UIButtonTypeSystem];
+    [bk setTitle:@"Backup các bản sao đã chọn (file zip)" forState:UIControlStateNormal];
+    bk.titleLabel.font = [UIFont systemFontOfSize:15];
+    [bk addTarget:self action:@selector(backupSelectedTapped) forControlEvents:UIControlEventTouchUpInside];
+    UIView *footer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 124)];
     [footer addSubview:btn];
+    [footer addSubview:bk];
+    self.trashButton = btn;
+    self.backupButton = bk;
+    self.footerView = footer;
+    [self layoutFooterForWidth:footer.bounds.size.width];
     self.tableView.tableFooterView = footer;
+}
+
+// Dung lai khung footer theo chieu rong that khi layout (sua loi 1.0.0).
+- (void)layoutFooterForWidth:(CGFloat)w {
+    if (w <= 0) return;
+    self.footerView.frame = CGRectMake(0, 0, w, 124);
+    self.trashButton.frame = CGRectMake(16, 8, w - 32, 48);
+    self.backupButton.frame = CGRectMake(16, 64, w - 32, 44);
+}
+
+- (void)toggleAllTapped {
+    NSArray<SSFileItem *> *copies = [self.group deletableCopies];
+    BOOL allSelected = copies.count > 0;
+    for (SSFileItem *it in copies) {
+        if (![self.selectedPaths containsObject:it.path]) { allSelected = NO; break; }
+    }
+    if (allSelected) {
+        [self.selectedPaths removeAllObjects];
+        self.navigationItem.rightBarButtonItem.title = @"Chọn hết";
+    } else {
+        for (SSFileItem *it in copies) [self.selectedPaths addObject:it.path];
+        self.navigationItem.rightBarButtonItem.title = @"Bỏ chọn hết";
+    }
+    [self.tableView reloadData];
+}
+
+- (void)backupSelectedTapped {
+    NSMutableArray<SSFileItem *> *targets = [NSMutableArray array];
+    for (SSFileItem *it in [self.group deletableCopies]) {
+        if ([self.selectedPaths containsObject:it.path]) [targets addObject:it];
+    }
+    if (targets.count == 0) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Chưa chọn bản sao nào" message:@"Chạm vào từng bản sao để chọn trước khi backup." preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:a animated:YES completion:nil];
+        return;
+    }
+    [self backupItems:targets];
+}
+
+- (void)backupItems:(NSArray<SSFileItem *> *)items {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *zipPath = nil;
+        NSString *err = [SSUtil createBackupZipForItems:items outPath:&zipPath];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (err) {
+                UIAlertController *e = [UIAlertController alertControllerWithTitle:@"Backup không thành công" message:err preferredStyle:UIAlertControllerStyleAlert];
+                [e addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [self presentViewController:e animated:YES completion:nil];
+                return;
+            }
+            [self shareZipAtPath:zipPath];
+        });
+    });
+}
+
+- (void)shareZipAtPath:(NSString *)zipPath {
+    NSURL *url = [NSURL fileURLWithPath:zipPath];
+    UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil];
+    av.popoverPresentationController.sourceView = self.view;
+    av.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2, self.view.bounds.size.height / 2, 1, 1);
+    [self presentViewController:av animated:YES completion:nil];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat w = self.tableView.bounds.size.width;
+    if (w > 0 && fabs(self.footerView.frame.size.width - w) > 0.5) {
+        [self layoutFooterForWidth:w];
+        self.tableView.tableFooterView = self.footerView;
+    }
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -117,19 +201,26 @@
         cell.detailTextLabel.text = [NSString stringWithFormat:@"Trong thư viện Ảnh — xoá bằng app Ảnh để không hỏng thư viện\n%@", it.path];
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.textLabel.textColor = [UIColor labelColor];
+    } else if (it.isProtected) {
+        cell.detailTextLabel.text = [NSString stringWithFormat:@"🛡️ Đang được bảo vệ — không chọn xoá hàng loạt ở đây\n%@", it.path];
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.textLabel.textColor = [UIColor labelColor];
     } else {
-        cell.detailTextLabel.text = [NSString stringWithFormat:@"Bản sao — %@\n%@", it.appName.length > 0 ? it.appName : @"File rời", it.path];
+        NSMutableString *sub = [NSMutableString stringWithFormat:@"Bản sao — %@ • %@", it.appName.length > 0 ? it.appName : @"File rời", [it levelLabel]];
+        if (it.note.length > 0) [sub appendFormat:@"\n%@", it.note];
+        [sub appendFormat:@"\n%@", it.path];
+        cell.detailTextLabel.text = sub;
         cell.accessoryType = [self.selectedPaths containsObject:it.path] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         cell.textLabel.textColor = [UIColor labelColor];
     }
-    cell.detailTextLabel.numberOfLines = 3;
+    cell.detailTextLabel.numberOfLines = 4;
     return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     SSFileItem *it = self.group.items[indexPath.row];
-    if (it == self.group.original || it.inLibrary) return;
+    if (it == self.group.original || it.inLibrary || it.isProtected) return;
     if ([self.selectedPaths containsObject:it.path]) [self.selectedPaths removeObject:it.path];
     else [self.selectedPaths addObject:it.path];
     [tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];

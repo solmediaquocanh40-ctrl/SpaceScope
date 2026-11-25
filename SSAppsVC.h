@@ -7,6 +7,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong) SSAppUsage *app;
 - (instancetype)initWithApp:(SSAppUsage *)app;
 - (void)clearCacheTapped;
+- (void)showFileActions:(SSFileItem *)item;
+- (void)confirmTrashItem:(SSFileItem *)item;
+- (void)backupItems:(NSArray<SSFileItem *> *)items;
+- (void)shareZipAtPath:(NSString *)zipPath;
+- (void)showMessage:(NSString *)title message:(NSString *)message;
 @end
 
 @interface SSAppsVC : UITableViewController

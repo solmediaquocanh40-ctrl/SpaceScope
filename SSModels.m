@@ -15,8 +15,29 @@ NSString * const SSStoreDidUpdateNotification = @"SSStoreDidUpdateNotification";
         _modified = modified;
         _appName = @"";
         _kind = SSItemKindOther;
+        _level = SSFileLevelCaution;
+        _note = @"";
+        _ownerName = @"";
+        _ownerPackage = @"";
     }
     return self;
+}
+- (NSString *)kindLabel {
+    switch (self.kind) {
+        case SSItemKindPhoto: return @"Ảnh";
+        case SSItemKindVideo: return @"Video";
+        case SSItemKindAudio: return @"Âm thanh";
+        case SSItemKindArchive: return @"File nén";
+        case SSItemKindDocument: return @"Tài liệu";
+        default: return @"File";
+    }
+}
+- (NSString *)levelLabel {
+    switch (self.level) {
+        case SSFileLevelSafe: return @"🟢 Xoá an toàn";
+        case SSFileLevelDanger: return @"🔴 Không nên xoá";
+        default: return @"🟡 Cân nhắc";
+    }
 }
 @end
 
@@ -32,7 +53,7 @@ NSString * const SSStoreDidUpdateNotification = @"SSStoreDidUpdateNotification";
 - (NSArray<SSFileItem *> *)deletableCopies {
     NSMutableArray<SSFileItem *> *out = [NSMutableArray array];
     for (SSFileItem *it in self.items) {
-        if (it != self.original && !it.inLibrary) [out addObject:it];
+        if (it != self.original && !it.inLibrary && !it.isProtected) [out addObject:it];
     }
     return out;
 }
@@ -51,6 +72,7 @@ NSString * const SSStoreDidUpdateNotification = @"SSStoreDidUpdateNotification";
         _name = @"";
         _containerPath = @"";
         _offlineHints = [NSMutableArray array];
+        _topItems = [NSMutableArray array];
     }
     return self;
 }

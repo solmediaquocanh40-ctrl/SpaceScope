@@ -22,6 +22,8 @@
 @property (nonatomic, strong) NSMutableDictionary<NSString *, SSAppUsage *> *appsByBundle;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *appNames;
 @property (nonatomic, strong) NSMutableSet<NSString *> *installedIDs;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *fileOwners;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *packageNames;
 @property (nonatomic, assign) int64_t dupMinBytes;
 @property (nonatomic, assign) NSInteger filesSinceProgress;
 @property (nonatomic, strong) NSDate *lastProgressDate;
@@ -43,6 +45,8 @@
 - (void)loadPreviousSnapshotAndSaveCurrent;
 - (NSDictionary<NSString *, NSString *> *)installedAppNames;
 - (NSSet<NSString *> *)dpkgPackageIDs;
+- (void)loadDpkgOwnership;
+- (void)classifyItem:(SSFileItem *)item app:(nullable SSAppUsage *)app;
 @end
 
 @implementation SSScanner
@@ -54,6 +58,8 @@
     self.appsByBundle = [NSMutableDictionary dictionary];
     self.appNames = [NSMutableDictionary dictionary];
     self.installedIDs = [NSMutableSet set];
+    self.fileOwners = [NSMutableDictionary dictionary];
+    self.packageNames = [NSMutableDictionary dictionary];
     self.dupMinBytes = [SSUtil dupMinMB] * 1024 * 1024;
     self.lastProgressDate = [NSDate date];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -68,6 +74,7 @@
     [self.appNames addEntriesFromDictionary:names];
     [self.installedIDs addObjectsFromArray:names.allKeys];
     [self.installedIDs unionSet:[self dpkgPackageIDs]];
+    [self loadDpkgOwnership];
 
     [self reportProgress:@"Đang quét thư viện ảnh & file tải về…"];
     [self walkPath:@"/var/mobile/Media" app:nil downloadedContext:NO];
@@ -133,7 +140,7 @@
     dispatch_once(&once, ^{
         photos = [NSSet setWithObjects:@"jpg", @"jpeg", @"heic", @"heif", @"png", @"gif", @"webp", @"bmp", @"tiff", @"raw", @"dng", nil];
         videos = [NSSet setWithObjects:@"mp4", @"mov", @"m4v", @"mkv", @"avi", @"webm", @"3gp", nil];
-        audios = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"flac", @"aac", @"ogg", nil];
+        audios = [NSSet setWithObjects:@"mp3", @"m4a", @"wav", @"flac", @"aac", @"ogg", @"caf", @"aiff", @"aif", @"amr", @"opus", @"m4b", @"oga", nil];
         docs = [NSSet setWithObjects:@"pdf", @"doc", @"docx", @"xls", @"xlsx", @"ppt", @"pptx", @"txt", @"rtf", nil];
     });
     if ([photos containsObject:ext]) return SSItemKindPhoto;
@@ -261,6 +268,14 @@
     item.inLibrary = inLibrary;
     item.downloaded = downloaded;
     if (app) item.appName = app.name;
+    [self classifyItem:item app:app];
+    if (app && size >= 5 * 1024 * 1024) {
+        [app.topItems addObject:item];
+        [app.topItems sortUsingComparator:^NSComparisonResult(SSFileItem *a, SSFileItem *b) {
+            return a.size > b.size ? NSOrderedAscending : (a.size < b.size ? NSOrderedDescending : NSOrderedSame);
+        }];
+        if (app.topItems.count > 15) [app.topItems removeObjectsInRange:NSMakeRange(15, app.topItems.count - 15)];
+    }
     if (size >= 5 * 1024 * 1024) [R.topFiles addObject:item];
     if (size >= self.dupMinBytes && ![SSUtil isPathInAppBundle:path]) {
         NSNumber *key = @(size);
@@ -271,6 +286,179 @@
         }
         [arr addObject:item];
     }
+}
+
+#pragma mark - Chu so huu file (dpkg) & phan loai muc canh bao
+
+// Doc danh sach file cua tung goi tu dpkg info (*.list) + ten hien thi tu status.
+// Khoa tra cuu chuan hoa ca 2 dang: co va khong co tien to /var/jb.
+- (void)loadDpkgOwnership {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray<NSString *> *statusPaths = @[@"/var/lib/dpkg/status", @"/var/jb/var/lib/dpkg/status",
+                                         @"/var/jb/Library/dpkg/status", @"/Library/dpkg/status"];
+    for (NSString *path in statusPaths) {
+        NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+        if (!content) continue;
+        NSString *pkg = nil;
+        for (NSString *line in [content componentsSeparatedByString:@"\n"]) {
+            if ([line hasPrefix:@"Package: "]) {
+                pkg = [[line substringFromIndex:9] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            } else if (pkg.length > 0 && [line hasPrefix:@"Name: "]) {
+                NSString *nm = [[line substringFromIndex:6] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (nm.length > 0 && !self.packageNames[pkg]) self.packageNames[pkg] = nm;
+            }
+        }
+    }
+    NSArray<NSString *> *infoDirs = @[@"/var/jb/Library/dpkg/info", @"/Library/dpkg/info",
+                                      @"/var/jb/var/lib/dpkg/info", @"/var/lib/dpkg/info"];
+    NSInteger files = 0;
+    for (NSString *dir in infoDirs) {
+        for (NSString *file in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+            if (![file hasSuffix:@".list"]) continue;
+            NSString *pkg = [file stringByDeletingPathExtension];
+            NSString *content = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:file]
+                                                          encoding:NSUTF8StringEncoding error:nil];
+            if (!content) continue;
+            for (NSString *line in [content componentsSeparatedByString:@"\n"]) {
+                NSString *p = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (p.length == 0 || [p isEqualToString:@"/."] || [p isEqualToString:@"/"]) continue;
+                if (!self.fileOwners[p]) { self.fileOwners[p] = pkg; files++; }
+                if ([p hasPrefix:@"/var/jb/"]) {
+                    NSString *alt = [p substringFromIndex:7];
+                    if (!self.fileOwners[alt]) self.fileOwners[alt] = pkg;
+                } else {
+                    NSString *alt = [@"/var/jb" stringByAppendingString:p];
+                    if (!self.fileOwners[alt]) self.fileOwners[alt] = pkg;
+                }
+            }
+        }
+    }
+    SSLog(@"Ban do so huu dpkg: %ld file, %lu goi co ten hien thi", (long)files, (unsigned long)self.packageNames.count);
+}
+
+// Gan muc canh bao + ghi chu + chu so huu cho 1 file. Thu tu luat: chat nhat truoc.
+- (void)classifyItem:(SSFileItem *)item app:(nullable SSAppUsage *)app {
+    NSString *path = item.path;
+    NSString *ext = [[path pathExtension] lowercaseString];
+    NSString *ownerPkg = self.fileOwners[path];
+    if (!ownerPkg && [path hasPrefix:@"/var/jb/"]) ownerPkg = self.fileOwners[[path substringFromIndex:7]];
+    if (!ownerPkg && ![path hasPrefix:@"/var/jb/"]) ownerPkg = self.fileOwners[[@"/var/jb" stringByAppendingString:path]];
+    if (ownerPkg) {
+        item.ownerPackage = ownerPkg;
+        item.ownerName = self.packageNames[ownerPkg] ?: ownerPkg;
+    }
+    if ([SSUtil isPhotoThumbnailPath:path]) {
+        item.inLibrary = NO;
+        item.level = SSFileLevelCaution;
+        item.note = @"Ảnh thu nhỏ do hệ thống tự tạo — xoá được, máy sẽ tạo lại khi mở app Ảnh (không phải ảnh gốc).";
+        return;
+    }
+    if (item.inLibrary) {
+        item.level = SSFileLevelDanger;
+        item.note = @"Nằm trong thư viện Ảnh — chỉ xem, xoá bằng app Ảnh để không hỏng thư viện.";
+        return;
+    }
+    if ([SSUtil isPathInAppBundle:path]) {
+        item.level = SSFileLevelDanger;
+        item.note = @"Nằm trong gói ứng dụng — không xoá file trực tiếp, hãy gỡ app nếu không dùng.";
+        return;
+    }
+    if (app && [[SSUtil protectedAppIDs] containsObject:app.bundleID]) {
+        item.isProtected = YES;
+        item.level = SSFileLevelDanger;
+        item.note = [NSString stringWithFormat:@"%@ nằm trong Danh sách bảo vệ — SpaceScope không dọn hàng loạt, chỉ xem và xử lý từng file.", app.name];
+        return;
+    }
+    if ([SSUtil isProtectedPath:path]) {
+        item.isProtected = YES;
+        item.level = SSFileLevelDanger;
+        item.note = @"Nằm trong vùng được bảo vệ (ghi âm cuộc gọi/dữ liệu quan trọng) — chỉ xoá từng file khi thật chắc chắn, nên backup trước.";
+        return;
+    }
+    if ([ext isEqualToString:@"sqlite"] || [ext isEqualToString:@"sqlite3"] || [ext isEqualToString:@"db"] ||
+        [ext isEqualToString:@"realm"] || [ext isEqualToString:@"db-wal"] || [ext isEqualToString:@"db-shm"]) {
+        item.isProtected = YES;
+        item.level = SSFileLevelDanger;
+        item.note = @"Cơ sở dữ liệu — có thể chứa tin nhắn/tài khoản của app, không xoá nếu không chắc chắn.";
+        return;
+    }
+    if (ownerPkg) {
+        BOOL core = [path containsString:@"/MobileSubstrate/DynamicLibraries/"] ||
+                    [path containsString:@"/LaunchDaemons/"] ||
+                    [path containsString:@"/PreferenceBundles/"] ||
+                    [path containsString:@"/PreferenceLoader/"] ||
+                    [ext isEqualToString:@"dylib"];
+        if (core) {
+            item.level = SSFileLevelDanger;
+            item.note = [NSString stringWithFormat:@"File lõi của %@ (%@) đang còn cài — xoá là nó ngừng chạy hoặc lỗi.", item.ownerName, ownerPkg];
+        } else {
+            item.level = SSFileLevelCaution;
+            item.note = [NSString stringWithFormat:@"Thuộc %@ (%@) đang còn cài — xoá có thể mất dữ liệu/cài đặt của nó.", item.ownerName, ownerPkg];
+        }
+        return;
+    }
+    BOOL inCache = [path containsString:@"/Caches/"] || [path containsString:@"/tmp/"] || [path hasPrefix:@"/var/tmp/"];
+    if (inCache) {
+        item.level = SSFileLevelSafe;
+        item.note = item.appName.length > 0
+            ? [NSString stringWithFormat:@"Cache/file tạm của %@ — xoá an toàn, app tự tạo lại.", item.appName]
+            : @"Cache/file tạm — xoá an toàn, tự tạo lại khi cần.";
+        return;
+    }
+    if ([path containsString:@"/Logs/"] || [path containsString:@"CrashReporter"] || [ext isEqualToString:@"log"] || [ext isEqualToString:@"ips"]) {
+        item.level = SSFileLevelSafe;
+        item.note = @"File log/báo cáo lỗi — xoá an toàn.";
+        return;
+    }
+    BOOL voiceMemo = [path containsString:@"VoiceMemos"] || [path containsString:@"voicememos"] ||
+                     ([path containsString:@"/Recordings"] && item.kind == SSItemKindAudio);
+    if (voiceMemo) {
+        item.level = SSFileLevelCaution;
+        item.note = @"Bản ghi âm (app Ghi âm) — nên backup trước khi xoá.";
+        return;
+    }
+    if ([ext isEqualToString:@"deb"] || [ext isEqualToString:@"ipa"]) {
+        item.level = SSFileLevelCaution;
+        item.note = @"File cài đặt — xoá được nếu đã cài xong và không cần giữ bản cài.";
+        return;
+    }
+    if (item.kind == SSItemKindArchive) {
+        item.level = SSFileLevelCaution;
+        item.note = @"File nén — kiểm tra nội dung bên trong trước khi xoá (có thể là bản sao lưu source).";
+        return;
+    }
+    if (app) {
+        if ([path containsString:@"/Documents/"]) {
+            item.level = SSFileLevelCaution;
+            item.note = [NSString stringWithFormat:@"Dữ liệu người dùng của %@ — xoá là mất dữ liệu trong app.", item.appName];
+        } else {
+            item.level = SSFileLevelCaution;
+            item.note = [NSString stringWithFormat:@"Dữ liệu của %@ — kiểm tra trước khi xoá.", item.appName];
+        }
+        return;
+    }
+    if (item.kind == SSItemKindAudio) {
+        item.level = SSFileLevelCaution;
+        item.note = @"File âm thanh — nghe thử/kiểm tra trước khi xoá, nên backup nếu là ghi âm quan trọng.";
+        return;
+    }
+    if (item.downloaded) {
+        item.level = SSFileLevelCaution;
+        item.note = @"File đã tải về/lưu trong máy — kiểm tra trước khi xoá.";
+        return;
+    }
+    if (item.kind == SSItemKindPhoto || item.kind == SSItemKindVideo) {
+        item.level = SSFileLevelCaution;
+        item.note = @"Ảnh/video nằm ngoài thư viện Ảnh — kiểm tra trước khi xoá.";
+        return;
+    }
+    if ([path hasPrefix:@"/var/jb"] || [path hasPrefix:@"/var/mobile/Library"]) {
+        item.level = SSFileLevelCaution;
+        item.note = @"Không thuộc gói nào đang cài — có thể là tàn dư của tweak/app đã gỡ, kiểm tra đường dẫn trước khi xoá.";
+        return;
+    }
+    item.level = SSFileLevelCaution;
+    item.note = @"Chưa rõ nguồn gốc — kiểm tra đường dẫn trước khi xoá.";
 }
 
 #pragma mark - Containers
@@ -384,6 +572,77 @@
     [self.result.junkItems addObject:j];
 }
 
+
+- (void)addOrphanDependencyInfo {
+    // Goi phu thuoc mo coi kieu iCleaner: thu vien khong con goi nao phu thuoc vao,
+    // khong so huu dylib tweak/app. CHI LIET KE — go bang Sileo, app khong tu go goi.
+    NSArray<NSString *> *statusCandidates = @[@"/var/jb/Library/dpkg/status", @"/Library/dpkg/status",
+                                              @"/var/jb/var/lib/dpkg/status", @"/var/lib/dpkg/status"];
+    NSString *statusText = nil;
+    for (NSString *p in statusCandidates) {
+        statusText = [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil];
+        if (statusText.length > 0) break;
+    }
+    if (statusText.length == 0) return;
+    NSMutableDictionary<NSString *, NSString *> *sections = [NSMutableDictionary dictionary];
+    NSMutableSet<NSString *> *allPkgs = [NSMutableSet set];
+    NSMutableSet<NSString *> *needed = [NSMutableSet set];
+    NSString *cur = nil;
+    for (NSString *rawLine in [statusText componentsSeparatedByString:@"\n"]) {
+        if ([rawLine hasPrefix:@"Package: "]) {
+            cur = [[rawLine substringFromIndex:9] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (cur.length > 0) [allPkgs addObject:cur];
+        } else if (cur.length > 0 && [rawLine hasPrefix:@"Section: "]) {
+            sections[cur] = [[rawLine substringFromIndex:9] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        } else if (cur.length > 0 && ([rawLine hasPrefix:@"Depends: "] || [rawLine hasPrefix:@"Pre-Depends: "])) {
+            NSString *rest = [rawLine substringFromIndex:([rawLine hasPrefix:@"Pre-"] ? 13 : 9)];
+            for (NSString *part in [rest componentsSeparatedByString:@","]) {
+                NSString *alt = [[part componentsSeparatedByString:@"|"] firstObject] ?: @"";
+                NSRange paren = [alt rangeOfString:@"("];
+                if (paren.location != NSNotFound) alt = [alt substringToIndex:paren.location];
+                NSRange colon = [alt rangeOfString:@":"];
+                if (colon.location != NSNotFound) alt = [alt substringToIndex:colon.location];
+                alt = [alt stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (alt.length > 0) [needed addObject:alt];
+            }
+        }
+    }
+    NSMutableSet<NSString *> *activePkgs = [NSMutableSet set];
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *filesOf = [NSMutableDictionary dictionary];
+    [self.fileOwners enumerateKeysAndObjectsUsingBlock:^(NSString *path, NSString *pkg, BOOL *stop) {
+        if (!filesOf[pkg]) filesOf[pkg] = [NSMutableArray array];
+        [filesOf[pkg] addObject:path];
+        if ([path containsString:@"/MobileSubstrate/DynamicLibraries/"] || [path containsString:@".app/"]) [activePkgs addObject:pkg];
+    }];
+    NSMutableArray<NSDictionary *> *cands = [NSMutableArray array];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *pkg in allPkgs) {
+        if ([needed containsObject:pkg]) continue;
+        if ([activePkgs containsObject:pkg]) continue;
+        NSString *sec = [sections[pkg] lowercaseString] ?: @"";
+        if (![sec containsString:@"librar"] && ![pkg hasPrefix:@"lib"]) continue;
+        int64_t sz = 0;
+        for (NSString *f in filesOf[pkg]) sz += (int64_t)[[fm attributesOfItemAtPath:f error:nil] fileSize];
+        [cands addObject:@{@"pkg": pkg, @"size": @(sz)}];
+    }
+    if (cands.count == 0) return;
+    [cands sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [b[@"size"] compare:a[@"size"]];
+    }];
+    int64_t total = 0;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (NSDictionary *c in cands) {
+        total += [c[@"size"] longLongValue];
+        if (names.count < 8) {
+            NSString *disp = self.packageNames[c[@"pkg"]] ?: c[@"pkg"];
+            [names addObject:[NSString stringWithFormat:@"%@ (%@)", disp, [SSUtil formatBytes:[c[@"size"] longLongValue]]]];
+        }
+    }
+    [self addJunkTitle:[NSString stringWithFormat:@"Gói phụ thuộc có thể mồ côi (%ld gói)", (long)cands.count]
+                detail:[NSString stringWithFormat:@"%@. Đây là các thư viện không còn gói nào cần tới — SpaceScope chỉ liệt kê để anh kiểm tra, hãy gỡ bằng Sileo cho an toàn (app không tự gỡ gói).", [names componentsJoinedByString:@", "]]
+                  path:@"" size:total tier:SSJunkTierInfo action:SSJunkActionInfoOnly extraPaths:nil];
+}
+
 - (void)buildJunkItems {
     NSFileManager *fm = [NSFileManager defaultManager];
 
@@ -391,18 +650,20 @@
     for (SSAppUsage *app in self.appsByBundle.allValues) {
         int64_t sz = app.cacheSize + app.tmpSize;
         if (sz < 1024 * 1024 || app.containerPath.length == 0) continue;
+        if ([[SSUtil protectedAppIDs] containsObject:app.bundleID]) continue;
+        if ([app.bundleID isEqualToString:@"com.apple.mobilesafari"]) continue;
         NSString *caches = [app.containerPath stringByAppendingPathComponent:@"Library/Caches"];
         NSString *tmp = [app.containerPath stringByAppendingPathComponent:@"tmp"];
         [self addJunkTitle:[NSString stringWithFormat:@"Cache của %@", app.name]
-                    detail:@"Xoá nội dung cache và file tạm — app tự tạo lại, không mất dữ liệu chính"
-                      path:caches size:sz tier:SSJunkTierSafe action:SSJunkActionClearContents
+                    detail:@"Bấm để mở ra xem từng file trong cache + file tạm rồi chọn lọc xoá — app tự tạo lại, không mất dữ liệu chính"
+                      path:caches size:sz tier:SSJunkTierSafe action:SSJunkActionBrowse
                 extraPaths:@[tmp]];
     }
 
     // Cache toan he thong cua nguoi dung + log + crash report
     int64_t globalCache = [SSUtil sizeOfPath:@"/var/mobile/Library/Caches"];
     [self addJunkTitle:@"Cache chung của hệ thống (người dùng)" detail:@"/var/mobile/Library/Caches — xoá an toàn"
-                  path:@"/var/mobile/Library/Caches" size:globalCache tier:SSJunkTierSafe action:SSJunkActionClearContents extraPaths:nil];
+                  path:@"/var/mobile/Library/Caches" size:globalCache tier:SSJunkTierSafe action:SSJunkActionBrowse extraPaths:nil];
     NSArray<NSString *> *logDirs = @[@"/var/mobile/Library/Logs/CrashReporter", @"/Library/Logs/CrashReporter",
                                      @"/var/jb/Library/Logs/CrashReporter", @"/var/mobile/Library/Logs"];
     NSMutableSet<NSString *> *seenLog = [NSMutableSet set];
@@ -411,11 +672,11 @@
         [seenLog addObject:dir];
         int64_t sz = [SSUtil sizeOfPath:dir];
         if (sz < 100 * 1024) continue;
-        [self addJunkTitle:@"Log & báo cáo crash" detail:dir path:dir size:sz tier:SSJunkTierSafe action:SSJunkActionClearContents extraPaths:nil];
+        [self addJunkTitle:@"Log & báo cáo crash" detail:dir path:dir size:sz tier:SSJunkTierSafe action:SSJunkActionBrowse extraPaths:nil];
     }
     int64_t varTmp = [SSUtil sizeOfPath:@"/var/tmp"];
-    [self addJunkTitle:@"Thư mục tạm /var/tmp" detail:@"File tạm của hệ thống và các app" path:@"/var/tmp"
-                  size:varTmp tier:SSJunkTierSafe action:SSJunkActionClearContents extraPaths:nil];
+    [self addJunkTitle:@"Thư mục tạm /var/tmp" detail:@"File tạm của hệ thống và các app — bấm để xem từng file" path:@"/var/tmp"
+                  size:varTmp tier:SSJunkTierSafe action:SSJunkActionBrowse extraPaths:nil];
 
     // Ban cap nhat iOS da tai ve cho cai
     int64_t ota = [SSUtil sizeOfPath:@"/var/MobileSoftwareUpdate"];
@@ -472,6 +733,86 @@
             }
         }
     }
+
+
+    // Don sau kieu iCleaner — moi nhom deu mo ra xem duoc tung file truoc khi xoa.
+    SSAppUsage *safari = self.appsByBundle[@"com.apple.mobilesafari"];
+    if (safari.containerPath.length > 0) {
+        NSString *safariDir = [safari.containerPath stringByAppendingPathComponent:@"Library/Safari"];
+        NSString *safariCache = [safari.containerPath stringByAppendingPathComponent:@"Library/Caches"];
+        int64_t s1 = [SSUtil sizeOfPath:safariDir];
+        int64_t s2 = [SSUtil sizeOfPath:safariCache];
+        if (s1 + s2 >= 5LL * 1024 * 1024) {
+            [self addJunkTitle:@"Dữ liệu & cache Safari"
+                        detail:@"Mở ra xem từng file trước khi xoá. Lưu ý: History.db là lịch sử duyệt web (cơ sở dữ liệu) — xoá là mất lịch sử."
+                          path:safariDir size:(s1 + s2) tier:SSJunkTierCaution action:SSJunkActionBrowse
+                    extraPaths:(s2 > 0 ? @[safariCache] : nil)];
+        }
+    }
+    {
+        NSString *thumbs = @"/var/mobile/Media/PhotoData/Thumbnails";
+        NSString *pcaches = @"/var/mobile/Media/PhotoData/Caches";
+        int64_t ts = [SSUtil sizeOfPath:thumbs];
+        int64_t pcs = [SSUtil sizeOfPath:pcaches];
+        if (ts + pcs >= 10LL * 1024 * 1024) {
+            [self addJunkTitle:@"Ảnh thu nhỏ (thumbnail) của thư viện Ảnh"
+                        detail:@"Ảnh xem trước do hệ thống tự tạo, KHÔNG phải ảnh gốc — xoá thì máy tự tạo lại khi mở app Ảnh."
+                          path:thumbs size:(ts + pcs) tier:SSJunkTierCaution action:SSJunkActionBrowse
+                    extraPaths:(pcs > 0 ? @[pcaches] : nil)];
+        }
+    }
+    {
+        NSString *att = @"/var/mobile/Library/SMS/Attachments";
+        int64_t as = [SSUtil sizeOfPath:att];
+        if (as >= 10LL * 1024 * 1024) {
+            [self addJunkTitle:@"File đính kèm tin nhắn (iMessage/SMS)"
+                        detail:@"Ảnh/video/file nhận qua Tin nhắn — mở xem từng file trước khi xoá; xoá là mất file trong cuộc trò chuyện."
+                          path:att size:as tier:SSJunkTierCaution action:SSJunkActionBrowse extraPaths:nil];
+        }
+    }
+    {
+        NSString *kb = @"/var/mobile/Library/Keyboard";
+        int64_t ks = [SSUtil sizeOfPath:kb];
+        if (ks >= 5LL * 1024 * 1024) {
+            [self addJunkTitle:@"Cache bàn phím & từ điển gõ"
+                        detail:@"Từ điển gõ cá nhân + cache bàn phím — xoá thì máy học lại thói quen gõ từ đầu."
+                          path:kb size:ks tier:SSJunkTierCaution action:SSJunkActionBrowse extraPaths:nil];
+        }
+    }
+    // Vung bao ve: moi app nam trong Danh sach bao ve deu co muc rieng, chi xem/backup.
+    for (NSString *bid in [SSUtil protectedAppIDs]) {
+        SSAppUsage *app = self.appsByBundle[bid];
+        if (app.containerPath.length == 0) continue;
+        SSJunkItem *j = [[SSJunkItem alloc] init];
+        j.title = [NSString stringWithFormat:@"🛡️ Dữ liệu %@ — vùng được bảo vệ", app.name];
+        j.detail = @"SpaceScope không dọn hàng loạt mục này. Mở ra chỉ để xem/backup; xoá từng file khi thật chắc chắn.";
+        j.path = app.containerPath;
+        j.size = app.totalSize;
+        j.tier = SSJunkTierInfo;
+        j.action = SSJunkActionBrowse;
+        j.protectedZone = YES;
+        [self.result.junkItems addObject:j];
+    }
+    // Thu muc ghi am cuoc goi cua tweak (AudioRecorder va tuong tu).
+    for (NSString *base in @[@"/var/mobile/Library", @"/var/mobile/Documents"]) {
+        for (NSString *name in [fm contentsOfDirectoryAtPath:base error:nil]) {
+            NSString *low = [name lowercaseString];
+            if (![low containsString:@"audiorecorder"] && ![low containsString:@"callrecorder"]) continue;
+            NSString *full = [base stringByAppendingPathComponent:name];
+            BOOL isDir = NO;
+            if (!([fm fileExistsAtPath:full isDirectory:&isDir] && isDir)) continue;
+            SSJunkItem *j = [[SSJunkItem alloc] init];
+            j.title = @"🛡️ Bản ghi âm cuộc gọi — vùng được bảo vệ";
+            j.detail = [NSString stringWithFormat:@"%@ — dữ liệu của anh, SpaceScope không dọn hàng loạt.", full];
+            j.path = full;
+            j.size = [SSUtil sizeOfPath:full];
+            j.tier = SSJunkTierInfo;
+            j.action = SSJunkActionBrowse;
+            j.protectedZone = YES;
+            [self.result.junkItems addObject:j];
+        }
+    }
+    [self addOrphanDependencyInfo];
 
     // Plist cai dat mo coi: tweak/app da go nhung file cai dat con sot lai
     NSString *prefsDir = @"/var/mobile/Library/Preferences";

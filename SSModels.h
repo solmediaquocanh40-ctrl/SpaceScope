@@ -13,6 +13,12 @@ typedef NS_ENUM(NSInteger, SSItemKind) {
     SSItemKindDocument
 };
 
+typedef NS_ENUM(NSInteger, SSFileLevel) {
+    SSFileLevelSafe = 0,
+    SSFileLevelCaution,
+    SSFileLevelDanger
+};
+
 @interface SSFileItem : NSObject
 @property (nonatomic, copy) NSString *path;
 @property (nonatomic, copy) NSString *name;
@@ -23,7 +29,14 @@ typedef NS_ENUM(NSInteger, SSItemKind) {
 @property (nonatomic, assign) BOOL downloaded;
 @property (nonatomic, copy) NSString *appName;
 @property (nonatomic, assign) SSItemKind kind;
+@property (nonatomic, assign) SSFileLevel level;
+@property (nonatomic, copy) NSString *note;
+@property (nonatomic, copy) NSString *ownerName;
+@property (nonatomic, copy) NSString *ownerPackage;
+@property (nonatomic, assign) BOOL isProtected;
 - (instancetype)initWithPath:(NSString *)path size:(int64_t)size created:(nullable NSDate *)created modified:(nullable NSDate *)modified;
+- (NSString *)kindLabel;
+- (NSString *)levelLabel;
 @end
 
 @interface SSDupGroup : NSObject
@@ -46,6 +59,7 @@ typedef NS_ENUM(NSInteger, SSItemKind) {
 @property (nonatomic, assign) int64_t tmpSize;
 @property (nonatomic, assign) int64_t docsSize;
 @property (nonatomic, strong) NSMutableArray<NSString *> *offlineHints;
+@property (nonatomic, strong) NSMutableArray<SSFileItem *> *topItems;
 @end
 
 typedef NS_ENUM(NSInteger, SSJunkTier) {
@@ -57,7 +71,8 @@ typedef NS_ENUM(NSInteger, SSJunkTier) {
 typedef NS_ENUM(NSInteger, SSJunkAction) {
     SSJunkActionClearContents = 0,
     SSJunkActionTrashItem,
-    SSJunkActionInfoOnly
+    SSJunkActionInfoOnly,
+    SSJunkActionBrowse
 };
 
 @interface SSJunkItem : NSObject
@@ -67,6 +82,7 @@ typedef NS_ENUM(NSInteger, SSJunkAction) {
 @property (nonatomic, assign) int64_t size;
 @property (nonatomic, assign) SSJunkTier tier;
 @property (nonatomic, assign) SSJunkAction action;
+@property (nonatomic, assign) BOOL protectedZone;
 @property (nonatomic, strong) NSMutableArray<NSString *> *extraPaths;
 @end
 

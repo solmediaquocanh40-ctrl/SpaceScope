@@ -1,0 +1,69 @@
+# ============================================================
+# WORKFLOW CO DIEN — build THANG tu cay nguon da up len repo
+# (khong mo zip, khong can file .zip trong repo).
+# Cai vao .github/workflows/build.yml — chay moi lan push.
+# ============================================================
+name: Build SpaceScope
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: rootful
+            theos: theos/theos
+            scheme: ""
+          - name: rootless
+            theos: theos/theos
+            scheme: rootless
+          - name: roothide
+            theos: roothide/theos
+            scheme: roothide
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kiem tra cay nguon
+        run: |
+          ls -la
+          if [ ! -f Makefile ]; then echo "Khong thay Makefile o goc repo — cay nguon chua up du"; exit 1; fi
+          echo "Thay Makefile, build thang tu cay nguon."
+
+      - name: Cài công cụ
+        run: |
+          brew install ldid dpkg make
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Cài Theos (${{ matrix.theos }})
+        run: |
+          git clone --recursive --depth=1 https://github.com/${{ matrix.theos }}.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Tải SDK (có private framework)
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
+          rm -rf $THEOS/sdks && mkdir -p $THEOS/sdks
+          cp -R /tmp/sdks/*.sdk $THEOS/sdks/ || true
+          ls $THEOS/sdks
+
+      - name: Sửa quyền script cài đặt (nếu dự án có)
+        run: chmod 755 layout/DEBIAN/postinst layout/DEBIAN/prerm 2>/dev/null || true
+
+      - name: Build
+        run: |
+          if [ -n "${{ matrix.scheme }}" ]; then export THEOS_PACKAGE_SCHEME=${{ matrix.scheme }}; fi
+          make package FINALPACKAGE=1
+
+      - name: Đổi tên .deb kèm scheme (tránh cài nhầm bản)
+        run: |
+          for f in packages/*.deb; do mv "$f" "packages/$(basename "$f" .deb)-${{ matrix.name }}.deb"; done
+          ls -la packages/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.name }}
+          path: packages/*.deb

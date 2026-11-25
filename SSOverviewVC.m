@@ -28,6 +28,7 @@
 @end
 
 @interface SSOverviewVC ()
+@property (nonatomic, strong) UIView *headerView;
 @property (nonatomic, strong) UILabel *summaryLabel;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) SSGaugeView *gauge;
@@ -42,6 +43,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [SSUtil applyThemeToViewController:self];
     self.title = @"Tổng quan";
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"arrow.clockwise"]
                                                                               style:UIBarButtonItemStylePlain target:self action:@selector(scanTapped)];
@@ -58,22 +60,46 @@
 
 - (UIView *)buildHeaderView {
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 168)];
-    self.summaryLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 14, header.bounds.size.width - 40, 26)];
+    self.summaryLabel = [[UILabel alloc] init];
     self.summaryLabel.font = [UIFont boldSystemFontOfSize:19];
     self.summaryLabel.adjustsFontSizeToFitWidth = YES;
     [header addSubview:self.summaryLabel];
-    self.gauge = [[SSGaugeView alloc] initWithFrame:CGRectMake(20, 48, header.bounds.size.width - 40, 18)];
+    self.gauge = [[SSGaugeView alloc] init];
     [header addSubview:self.gauge];
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 74, header.bounds.size.width - 40, 52)];
+    self.statusLabel = [[UILabel alloc] init];
     self.statusLabel.font = [UIFont systemFontOfSize:14];
     self.statusLabel.numberOfLines = 3;
     self.statusLabel.textColor = [UIColor secondaryLabelColor];
     [header addSubview:self.statusLabel];
-    self.scanLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 128, header.bounds.size.width - 40, 30)];
+    self.scanLabel = [[UILabel alloc] init];
     self.scanLabel.font = [UIFont systemFontOfSize:12];
     self.scanLabel.textColor = [UIColor tertiaryLabelColor];
     [header addSubview:self.scanLabel];
+    self.headerView = header;
+    [self layoutHeaderForWidth:header.bounds.size.width];
     return header;
+}
+
+// Dung khung theo chieu rong THAT cua bang tai thoi diem layout.
+// (Ban 1.0.0 tinh khung mot lan trong viewDidLoad tu view.bounds chua
+// on dinh nen header bi co/keo tren may that — da sua tu ban 1.0.1.)
+- (void)layoutHeaderForWidth:(CGFloat)w {
+    if (w <= 0) return;
+    self.headerView.frame = CGRectMake(0, 0, w, 168);
+    self.summaryLabel.frame = CGRectMake(20, 14, w - 40, 26);
+    self.gauge.frame = CGRectMake(20, 48, w - 40, 18);
+    [self.gauge setNeedsDisplay];
+    self.statusLabel.frame = CGRectMake(20, 74, w - 40, 52);
+    self.scanLabel.frame = CGRectMake(20, 128, w - 40, 30);
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat w = self.tableView.bounds.size.width;
+    if (w > 0 && fabs(self.headerView.frame.size.width - w) > 0.5) {
+        [self layoutHeaderForWidth:w];
+        self.tableView.tableHeaderView = self.headerView;
+    }
 }
 
 - (void)refreshHeader {

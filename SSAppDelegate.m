@@ -11,7 +11,7 @@
 @implementation SSAppDelegate
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    SSLog(@"=== SpaceScope 1.0.0 khoi dong ===");
+    SSLog(@"=== SpaceScope 1.2.0 khoi dong ===");
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
 
     SSOverviewVC *overview = [[SSOverviewVC alloc] init];
