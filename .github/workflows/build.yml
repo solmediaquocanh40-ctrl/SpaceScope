@@ -1,15 +1,11 @@
 # ============================================================
-# WORKFLOW "MỞ ZIP" — cài MỘT LẦN DUY NHẤT vào .github/workflows/build.yml
-# Sau đó mỗi lần ra bản mới chỉ cần up đúng 1 file *-source.zip lên repo
-# (bằng điện thoại cũng được), workflow tự mở zip ra cây thư mục rồi build.
-# Áp dụng cho mọi tweak đóng gói dạng zip nguồn của Quoc
-# (ChargeGuard, AppInfoPress, TweakPacker, GhostModeHome, WaveToSilence...).
+# WORKFLOW CO DIEN — build THANG tu cay nguon da up len repo
+# (khong mo zip, khong can file .zip trong repo).
+# Cai vao .github/workflows/build.yml — chay moi lan push.
 # ============================================================
-name: Build from source zip
+name: Build SpaceScope
 on:
   push:
-    paths:
-      - '*.zip'
   workflow_dispatch:
 
 jobs:
@@ -31,16 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Mở zip nguồn ra cây thư mục
+      - name: Kiem tra cay nguon
         run: |
-          ZIP=$(ls *.zip | sort -V | tail -n 1)
-          if [ -z "$ZIP" ]; then echo "Không thấy file .zip nào trong repo"; exit 1; fi
-          echo "Đang mở: $ZIP"
-          rm -rf _src && mkdir _src
-          unzip -o "$ZIP" -d _src
-          cp -a _src/. .
-          rm -rf _src
-          ls
+          ls -la
+          if [ ! -f Makefile ]; then echo "Khong thay Makefile o goc repo — cay nguon chua up du"; exit 1; fi
+          echo "Thay Makefile, build thang tu cay nguon."
 
       - name: Cài công cụ
         run: |
