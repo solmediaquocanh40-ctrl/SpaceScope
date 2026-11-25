@@ -1,0 +1,8 @@
+Package: com.anhdang.spacescope
+Name: SpaceScope
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Quét toàn máy xem dung lượng nặng ở đâu: file nặng nhất, ảnh/video/tải về, file trùng lặp (xoá bản sao, luôn giữ file gốc), rác ẩn và tàn dư jailbreak, kèm kết luận vì sao máy full và đo lại sau khi dọn. Storage scanner: find the biggest files, duplicates (always keeps the original), hidden junk and jailbreak leftovers, with a plain-language verdict on why storage is full.
+Maintainer: Quoc
+Author: Quoc
+Section: Applications

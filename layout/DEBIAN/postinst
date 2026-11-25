@@ -1,0 +1,27 @@
+#!/bin/sh
+# Dang ky icon app voi he thong ngay sau khi cai (bai hoc ChargeGuard 0.2.0:
+# goi .deb chua app ma postinst khong chay uicache thi cai xong khong co icon).
+APP=""
+for p in /var/jb/Applications/SpaceScope.app /Applications/SpaceScope.app; do
+    if [ -d "$p" ]; then APP="$p"; break; fi
+done
+if [ -z "$APP" ]; then
+    APP=$(find /private/var/containers/Bundle/Application -maxdepth 3 -name "SpaceScope.app" 2>/dev/null | head -n 1)
+fi
+UIC=""
+for u in /var/jb/usr/bin/uicache /usr/bin/uicache uicache; do
+    if command -v "$u" >/dev/null 2>&1 || [ -x "$u" ]; then UIC="$u"; break; fi
+done
+if [ -n "$UIC" ]; then
+    if [ -n "$APP" ]; then
+        echo "SpaceScope postinst: uicache -p $APP"
+        "$UIC" -p "$APP"
+        echo "SpaceScope postinst: uicache -p ket qua $?"
+    fi
+    echo "SpaceScope postinst: uicache -a (dang ky lai toan bo)"
+    "$UIC" -a
+    echo "SpaceScope postinst: uicache -a ket qua $?"
+else
+    echo "SpaceScope postinst: khong tim thay uicache, bo qua"
+fi
+exit 0
