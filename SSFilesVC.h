@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "SSModels.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
